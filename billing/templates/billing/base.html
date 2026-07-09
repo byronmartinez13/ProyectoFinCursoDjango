@@ -98,6 +98,10 @@
     <div class="collapse navbar-collapse" id="nav">
       <ul class="navbar-nav me-auto">
         {% if user.is_authenticated %}
+        {% if user|has_group:'Cliente' %}
+        <li class="nav-item"><a class="nav-link" href="{% url 'store:catalog' %}">Tienda</a></li>
+        <li class="nav-item"><a class="nav-link" href="{% url 'store:cart' %}">&#128722; Carrito</a></li>
+        {% endif %}
         <li class="nav-item dropdown">
           <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown" aria-expanded="false">Ventas</a>
           <ul class="dropdown-menu">
@@ -106,6 +110,10 @@
             <li><a class="dropdown-item" href="{% url 'billing:brand_list' %}">Marcas</a></li>
             <li><a class="dropdown-item" href="{% url 'billing:productgroup_list' %}">Grupos</a></li>
             <li><a class="dropdown-item" href="{% url 'billing:supplier_list' %}">Proveedores</a></li>
+            <li><a class="dropdown-item" href="{% url 'billing:product_list' %}">Productos</a></li>
+            <li><hr class="dropdown-divider"></li>
+            {% elif user|has_group:'Vendedor' %}
+            <li><h6 class="dropdown-header">Catálogos</h6></li>
             <li><a class="dropdown-item" href="{% url 'billing:product_list' %}">Productos</a></li>
             <li><hr class="dropdown-divider"></li>
             {% endif %}

@@ -1,5 +1,29 @@
 from django import forms
+from django.contrib.auth import get_user_model
+from django.contrib.auth.forms import PasswordResetForm
 from django.contrib.auth.models import User, Group, Permission
+
+
+# === RECUPERAR CONTRASEÑA POR USUARIO (no por email) ===
+class UsernamePasswordResetForm(PasswordResetForm):
+    """
+    Igual que el PasswordResetForm de Django, pero el usuario ingresa su
+    nombre de usuario en vez de su email. Internamente se sigue usando la
+    clave 'email' del formulario (así save() de la clase base no necesita
+    reescribirse), solo cambia qué significa ese valor: aquí es un username,
+    y get_users() lo busca por username en vez de por email. El correo de
+    recuperación se envía igual a la dirección real registrada en la cuenta.
+    """
+    email = forms.CharField(
+        label='Usuario',
+        max_length=150,
+        widget=forms.TextInput(attrs={'class': 'form-control', 'autofocus': True}),
+    )
+
+    def get_users(self, username):
+        UserModel = get_user_model()
+        active_users = UserModel._default_manager.filter(username__iexact=username, is_active=True)
+        return (u for u in active_users if u.has_usable_password() and u.email)
 
 
 # === EDICIÓN DE USUARIO (datos + roles) ===

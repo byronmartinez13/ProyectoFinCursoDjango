@@ -3,7 +3,6 @@ from decimal import Decimal
 from io import BytesIO
 from django.shortcuts import render, redirect, get_object_or_404
 from django.http import HttpResponse
-from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.views.generic import ListView
 from django.contrib import messages
@@ -14,8 +13,11 @@ from .forms import (PurchaseForm, PurchaseDetailFormSet,
                     PurchaseDetailEditFormSet, SupplierCreditNoteForm)
 from billing.models import Supplier, Product
 from shared.money import round_money
-from shared.mixins import SearchExportMixin
+from shared.mixins import SearchExportMixin, GroupRequiredMixin
+from shared.decorators import roles_required
 from inventory.models import StockMovement
+
+_PURCHASING_ROLES = ('Administrador', 'Analista de Compras')
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────
@@ -43,7 +45,8 @@ def _product_data_json():
 
 # ── Listado ───────────────────────────────────────────────────────────────
 
-class PurchaseListView(LoginRequiredMixin, SearchExportMixin, ListView):
+class PurchaseListView(LoginRequiredMixin, GroupRequiredMixin, SearchExportMixin, ListView):
+    group_required      = list(_PURCHASING_ROLES)
     model               = Purchase
     queryset            = Purchase.objects.select_related('supplier').all()
     template_name       = 'purchasing/purchase_list.html'
@@ -76,7 +79,7 @@ class PurchaseListView(LoginRequiredMixin, SearchExportMixin, ListView):
 
 # ── Crear borrador ────────────────────────────────────────────────────────
 
-@login_required
+@roles_required(*_PURCHASING_ROLES)
 def purchase_create(request):
     if request.method == 'POST':
         form    = PurchaseForm(request.POST)
@@ -103,7 +106,7 @@ def purchase_create(request):
 
 # ── Editar borrador ───────────────────────────────────────────────────────
 
-@login_required
+@roles_required(*_PURCHASING_ROLES)
 def purchase_update(request, pk):
     purchase = get_object_or_404(Purchase, pk=pk)
     if not purchase.can_edit:
@@ -133,7 +136,7 @@ def purchase_update(request, pk):
 
 # ── Confirmar compra (actualiza stock) ───────────────────────────────────
 
-@login_required
+@roles_required(*_PURCHASING_ROLES)
 def purchase_confirm(request, pk):
     purchase = get_object_or_404(Purchase, pk=pk)
     if not purchase.can_confirm:
@@ -167,7 +170,7 @@ def purchase_confirm(request, pk):
 
 # ── Anular compra (revierte stock) ───────────────────────────────────────
 
-@login_required
+@roles_required(*_PURCHASING_ROLES)
 def purchase_cancel(request, pk):
     purchase = get_object_or_404(Purchase, pk=pk)
     if not purchase.can_cancel:
@@ -202,7 +205,7 @@ def purchase_cancel(request, pk):
 
 # ── Nota de crédito a proveedor ───────────────────────────────────────────
 
-@login_required
+@roles_required(*_PURCHASING_ROLES)
 def supplier_credit_note_create(request, pk):
     purchase = get_object_or_404(Purchase, pk=pk)
     if not purchase.can_credit_note:
@@ -231,7 +234,7 @@ def supplier_credit_note_create(request, pk):
 
 # ── Detalle ───────────────────────────────────────────────────────────────
 
-@login_required
+@roles_required(*_PURCHASING_ROLES)
 def purchase_detail(request, pk):
     purchase = get_object_or_404(
         Purchase.objects.select_related('supplier')
@@ -243,7 +246,7 @@ def purchase_detail(request, pk):
 
 # ── PDF de compra ────────────────────────────────────────────────────────
 
-@login_required
+@roles_required(*_PURCHASING_ROLES)
 def purchase_pdf(request, pk):
     from reportlab.lib.pagesizes import A4
     from reportlab.lib import colors
@@ -440,7 +443,7 @@ def purchase_pdf(request, pk):
 
 # ── Eliminar borrador ─────────────────────────────────────────────────────
 
-@login_required
+@roles_required(*_PURCHASING_ROLES)
 def purchase_delete(request, pk):
     purchase = get_object_or_404(Purchase, pk=pk)
     if not purchase.can_delete:

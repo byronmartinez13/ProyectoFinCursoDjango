@@ -331,3 +331,19 @@ class AdminOnlyMixin(LoginRequiredMixin, GroupRequiredMixin):
     group_required = ['Administrador']
     group_redirect_url = reverse_lazy('billing:dashboard')
     strict = True
+
+
+class ClienteRequiredMixin(LoginRequiredMixin, GroupRequiredMixin):
+    """
+    Solo el rol Cliente puede acceder. Se usa en la tienda (catálogo,
+    carrito, checkout): estas vistas son exclusivas de clientes, así que,
+    igual que en AdminOnlyMixin, no hay excepción para cuentas sin rol
+    asignado (strict=True).
+
+    Uso:
+        class CatalogView(ClienteRequiredMixin, ListView):
+            ...
+    """
+    group_required = ['Cliente']
+    group_redirect_url = reverse_lazy('billing:dashboard')
+    strict = True

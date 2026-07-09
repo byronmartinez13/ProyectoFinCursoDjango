@@ -32,6 +32,13 @@ ROLES = {
         'view_suppliercreditnote', 'add_suppliercreditnote',
         'view_stockmovement',
     ],
+
+    # El Cliente se autoregistra desde la página pública. Solo puede ver el
+    # catálogo de productos (su propia tienda, carrito y pedidos se manejan
+    # con lógica de vista, no con permisos de Django).
+    'Cliente': [
+        'view_product',
+    ],
 }
 
 

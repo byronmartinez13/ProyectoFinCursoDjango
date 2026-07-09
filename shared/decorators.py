@@ -1,5 +1,8 @@
 import logging
 from functools import wraps
+from django.contrib import messages
+from django.contrib.auth.decorators import login_required
+from django.shortcuts import redirect
 from django.utils import timezone
 
 # Configurar logger para auditoría
@@ -70,3 +73,43 @@ def audit_action(action_name):
 
         return wrapper
     return decorator
+
+
+def roles_required(*group_names, strict=False, redirect_url='/'):
+    """
+    Decorador equivalente a shared.mixins.GroupRequiredMixin pero para
+    vistas basadas en función. El superusuario siempre pasa.
+
+    Con strict=False (por defecto) las cuentas sin ningún rol asignado
+    (legado) conservan acceso completo, igual que GroupRequiredMixin.
+    Con strict=True, ninguna cuenta sin rol pasa.
+
+    Uso:
+        @roles_required('Administrador', 'Analista de Compras')
+        def purchase_create(request):
+            ...
+    """
+    def decorator(view_func):
+        @wraps(view_func)
+        @login_required
+        def wrapper(request, *args, **kwargs):
+            if request.user.is_superuser:
+                return view_func(request, *args, **kwargs)
+            user_groups = request.user.groups.all()
+            if not strict and not user_groups.exists():
+                return view_func(request, *args, **kwargs)
+            if user_groups.filter(name__in=group_names).exists():
+                return view_func(request, *args, **kwargs)
+            messages.error(request, 'No tienes permiso para acceder a esta opción.')
+            return redirect(redirect_url)
+        return wrapper
+    return decorator
+
+
+def cliente_required(view_func):
+    """
+    Decorador equivalente a shared.mixins.ClienteRequiredMixin pero para
+    vistas basadas en función (usado en store/views.py: carrito, checkout).
+    Solo deja pasar a cuentas con el rol Cliente (o superusuario).
+    """
+    return roles_required('Cliente', strict=True, redirect_url='billing:dashboard')(view_func)

@@ -10,14 +10,14 @@ from django.urls import reverse_lazy
 from django.db import transaction
 from django.db.models import F
 from .models import *
-from shared.mixins import StaffRequiredMixin, SearchExportMixin, AdminOnlyMixin
-from shared.decorators import audit_action
+from shared.mixins import StaffRequiredMixin, SearchExportMixin, AdminOnlyMixin, GroupRequiredMixin
+from shared.decorators import audit_action, roles_required
+from shared.emails import send_welcome_email
 from django.views.decorators.http import require_POST
 from .forms import SignUpForm, BrandForm, InvoiceForm, InvoiceDetailFormSet, InvoiceDetailEditFormSet, CreditNoteForm, CustomerQuickForm, SupplierQuickForm
 from .ProductForm import ProductForm
 from .CustomerForm import CustomerForm
-from decimal import Decimal
-from shared.money import round_money
+from .services import check_stock, emit_invoice, recalc_invoice
 from inventory.models import StockMovement
 
 
@@ -35,6 +35,9 @@ class SignUpView(AdminOnlyMixin, CreateView):
 
     def form_valid(self, form):
         response = super().form_valid(form)
+        role = form.cleaned_data.get('role')
+        if self.object.email:
+            send_welcome_email(self.object, form.cleaned_data['password1'], role.name if role else '—')
         messages.success(
             self.request,
             f'Usuario "{self.object.username}" creado correctamente.'
@@ -50,6 +53,9 @@ def home(request):
 # === DASHBOARD (selector de módulos) ===
 @login_required
 def dashboard(request):
+    if request.user.groups.filter(name='Cliente').exists() and not request.user.is_superuser:
+        return redirect('store:catalog')
+
     from purchasing.models import Purchase
     from django.db.models import Sum, Count
     from django.db.models.functions import TruncMonth
@@ -307,7 +313,7 @@ def invoice_pdf(request, pk):
 
 
 # ── BRANDS ──────────────────────────────────────────────────────────────
-@login_required
+@roles_required('Administrador', 'Analista de Compras')
 @audit_action('CREATE_BRAND')
 def brand_create(request):
     if request.method == 'POST':
@@ -320,7 +326,7 @@ def brand_create(request):
         form = BrandForm()
     return render(request, 'billing/brand_form.html', {'form': form, 'title': 'Crear Marca'})
 
-@login_required
+@roles_required('Administrador', 'Analista de Compras')
 @audit_action('UPDATE_BRAND')
 def brand_update(request, pk):
     brand = get_object_or_404(Brand, pk=pk)
@@ -334,7 +340,7 @@ def brand_update(request, pk):
         form = BrandForm(instance=brand)
     return render(request, 'billing/brand_form.html', {'form': form, 'title': 'Editar Marca'})
 
-@login_required
+@roles_required('Administrador')
 @audit_action('DELETE_BRAND')
 def brand_delete(request, pk):
     brand = get_object_or_404(Brand, pk=pk)
@@ -346,14 +352,6 @@ def brand_delete(request, pk):
 
 
 # ── INVOICES ─────────────────────────────────────────────────────────────
-
-def _recalc_invoice(invoice):
-    details          = list(invoice.details.all())
-    invoice.subtotal = round_money(sum(d.subtotal   for d in details))
-    invoice.tax      = round_money(sum(d.tax_amount for d in details))
-    invoice.total    = round_money(invoice.subtotal + invoice.tax)
-    invoice.save()
-
 
 def _product_data_json():
     data = {
@@ -368,7 +366,7 @@ def _product_data_json():
     return json.dumps(data)
 
 
-@login_required
+@roles_required('Administrador', 'Vendedor')
 def invoice_create(request):
     """Crea un borrador de factura con sus líneas de detalle (sin afectar stock)."""
     if request.method == 'POST':
@@ -380,7 +378,7 @@ def invoice_create(request):
             invoice.save()
             formset.instance = invoice
             formset.save()
-            _recalc_invoice(invoice)
+            recalc_invoice(invoice)
             messages.info(request,
                 f'Borrador #{invoice.id} guardado. Revísalo y pulsa "Emitir" para confirmar.')
             return redirect('billing:invoice_detail', pk=invoice.pk)
@@ -395,7 +393,7 @@ def invoice_create(request):
     })
 
 
-@login_required
+@roles_required('Administrador', 'Vendedor')
 def invoice_update(request, pk):
     """Edita un borrador de factura (solo en estado BORRADOR)."""
     invoice = get_object_or_404(Invoice, pk=pk)
@@ -409,7 +407,7 @@ def invoice_update(request, pk):
         if form.is_valid() and formset.is_valid():
             form.save()
             formset.save()
-            _recalc_invoice(invoice)
+            recalc_invoice(invoice)
             messages.success(request, f'Borrador #{invoice.id} actualizado.')
             return redirect('billing:invoice_detail', pk=invoice.pk)
     else:
@@ -433,35 +431,13 @@ def invoice_confirm(request, pk):
         return redirect('billing:invoice_detail', pk=pk)
 
     if request.method == 'POST':
-        details = list(invoice.details.select_related('product').all())
-
-        # Validar stock antes de tocar nada
-        stock_errors = [
-            f'{d.product.name}: disponible {d.product.stock}, requerido {d.quantity}'
-            for d in details if d.product.stock < d.quantity
-        ]
+        stock_errors = check_stock(invoice)
         if stock_errors:
             for msg in stock_errors:
                 messages.error(request, f'Stock insuficiente — {msg}')
             return redirect('billing:invoice_confirm', pk=pk)
 
-        with transaction.atomic():
-            for detail in details:
-                Product.objects.filter(pk=detail.product_id).update(
-                    stock=F('stock') - detail.quantity
-                )
-            StockMovement.objects.bulk_create([
-                StockMovement(
-                    product_id=detail.product_id,
-                    quantity=-detail.quantity,
-                    movement_type=StockMovement.VENTA,
-                    user=request.user,
-                    invoice=invoice,
-                )
-                for detail in details
-            ])
-            invoice.estado = Invoice.EMITIDA
-            invoice.save()
+        emit_invoice(invoice, request.user)
 
         messages.success(request, f'Factura #{invoice.id} emitida. Stock actualizado.')
         return redirect('billing:invoice_detail', pk=invoice.pk)
@@ -483,7 +459,7 @@ def invoice_confirm(request, pk):
     })
 
 
-@login_required
+@roles_required('Administrador', 'Analista de Compras')
 def invoice_cancel(request, pk):
     """Anula una factura emitida: revierte el stock y la marca como Anulada/Inactiva."""
     invoice = get_object_or_404(Invoice, pk=pk)
@@ -559,7 +535,7 @@ def invoice_substitute(request, pk):
                     unit_price   = detail.unit_price,
                     discount_pct = detail.discount_pct,
                 )
-        _recalc_invoice(new_invoice)
+        recalc_invoice(new_invoice)
 
         messages.success(request,
             f'Factura #{invoice.id} anulada. Nuevo borrador #{new_invoice.id} creado. '
@@ -626,7 +602,8 @@ def invoice_delete(request, pk):
 
 
 # ── BRAND (CBV list) ─────────────────────────────────────────────────────
-class BrandListView(LoginRequiredMixin, SearchExportMixin, ListView):
+class BrandListView(LoginRequiredMixin, GroupRequiredMixin, SearchExportMixin, ListView):
+    group_required  = ['Administrador', 'Analista de Compras']
     model           = Brand
     template_name   = 'billing/brand_list.html'
     context_object_name = 'items'
@@ -641,7 +618,8 @@ class BrandListView(LoginRequiredMixin, SearchExportMixin, ListView):
 
 
 # ── PRODUCTGROUP (CBV) ──────────────────────────────────────────────────
-class ProductGroupListView(LoginRequiredMixin, SearchExportMixin, ListView):
+class ProductGroupListView(LoginRequiredMixin, GroupRequiredMixin, SearchExportMixin, ListView):
+    group_required  = ['Administrador', 'Analista de Compras']
     model           = ProductGroup
     template_name   = 'billing/productgroup_list.html'
     context_object_name = 'items'
@@ -652,19 +630,22 @@ class ProductGroupListView(LoginRequiredMixin, SearchExportMixin, ListView):
         {'param': 'is_active', 'field': 'is_active', 'type': 'bool'},
     ]
 
-class ProductGroupCreateView(LoginRequiredMixin, CreateView):
+class ProductGroupCreateView(LoginRequiredMixin, GroupRequiredMixin, CreateView):
+    group_required = ['Administrador', 'Analista de Compras']
     model         = ProductGroup
     fields        = ['name', 'is_active']
     template_name = 'billing/productgroup_form.html'
     success_url   = reverse_lazy('billing:productgroup_list')
 
-class ProductGroupUpdateView(LoginRequiredMixin, UpdateView):
+class ProductGroupUpdateView(LoginRequiredMixin, GroupRequiredMixin, UpdateView):
+    group_required = ['Administrador', 'Analista de Compras']
     model         = ProductGroup
     fields        = ['name', 'is_active']
     template_name = 'billing/productgroup_form.html'
     success_url   = reverse_lazy('billing:productgroup_list')
 
-class ProductGroupDeleteView(LoginRequiredMixin, StaffRequiredMixin, DeleteView):
+class ProductGroupDeleteView(LoginRequiredMixin, GroupRequiredMixin, StaffRequiredMixin, DeleteView):
+    group_required    = ['Administrador']
     model             = ProductGroup
     template_name     = 'billing/productgroup_confirm_delete.html'
     success_url       = reverse_lazy('billing:productgroup_list')
@@ -672,7 +653,8 @@ class ProductGroupDeleteView(LoginRequiredMixin, StaffRequiredMixin, DeleteView)
 
 
 # ── SUPPLIER (CBV) ──────────────────────────────────────────────────────
-class SupplierListView(LoginRequiredMixin, SearchExportMixin, ListView):
+class SupplierListView(LoginRequiredMixin, GroupRequiredMixin, SearchExportMixin, ListView):
+    group_required  = ['Administrador', 'Analista de Compras']
     model           = Supplier
     template_name   = 'billing/supplier_list.html'
     context_object_name = 'items'
@@ -687,27 +669,30 @@ class SupplierListView(LoginRequiredMixin, SearchExportMixin, ListView):
         {'param': 'is_active', 'field':  'is_active', 'type': 'bool'},
     ]
 
-class SupplierCreateView(LoginRequiredMixin, CreateView):
+class SupplierCreateView(LoginRequiredMixin, GroupRequiredMixin, CreateView):
+    group_required = ['Administrador', 'Analista de Compras']
     model         = Supplier
     fields        = ['name', 'contact_name', 'email', 'phone', 'address', 'is_active', 'photo']
     template_name = 'billing/supplier_form.html'
     success_url   = reverse_lazy('billing:supplier_list')
 
-class SupplierUpdateView(LoginRequiredMixin, UpdateView):
+class SupplierUpdateView(LoginRequiredMixin, GroupRequiredMixin, UpdateView):
+    group_required = ['Administrador', 'Analista de Compras']
     model         = Supplier
     fields        = ['name', 'contact_name', 'email', 'phone', 'address', 'is_active', 'photo']
     template_name = 'billing/supplier_form.html'
     success_url   = reverse_lazy('billing:supplier_list')
 
-class SupplierDeleteView(LoginRequiredMixin, StaffRequiredMixin, DeleteView):
+class SupplierDeleteView(LoginRequiredMixin, GroupRequiredMixin, DeleteView):
+    group_required     = ['Administrador', 'Analista de Compras']
     model              = Supplier
     template_name      = 'billing/supplier_confirm_delete.html'
     success_url        = reverse_lazy('billing:supplier_list')
-    staff_redirect_url = '/suppliers/'
 
 
 # ── PRODUCT (CBV) ───────────────────────────────────────────────────────
-class ProductListView(LoginRequiredMixin, SearchExportMixin, ListView):
+class ProductListView(LoginRequiredMixin, GroupRequiredMixin, SearchExportMixin, ListView):
+    group_required  = ['Administrador', 'Analista de Compras', 'Vendedor']
     model           = Product
     queryset        = Product.objects.select_related('brand', 'group').prefetch_related('suppliers')
     template_name   = 'billing/product_list.html'
@@ -735,19 +720,22 @@ class ProductListView(LoginRequiredMixin, SearchExportMixin, ListView):
         {'param': 'is_active', 'field':  'is_active',       'type': 'bool'},
     ]
 
-class ProductCreateView(LoginRequiredMixin, CreateView):
+class ProductCreateView(LoginRequiredMixin, GroupRequiredMixin, CreateView):
+    group_required = ['Administrador', 'Analista de Compras']
     model         = Product
     form_class    = ProductForm
     template_name = 'billing/product_form.html'
     success_url   = reverse_lazy('billing:product_list')
 
-class ProductUpdateView(LoginRequiredMixin, UpdateView):
+class ProductUpdateView(LoginRequiredMixin, GroupRequiredMixin, UpdateView):
+    group_required = ['Administrador', 'Analista de Compras']
     model         = Product
     form_class    = ProductForm
     template_name = 'billing/product_form.html'
     success_url   = reverse_lazy('billing:product_list')
 
-class ProductDeleteView(LoginRequiredMixin, StaffRequiredMixin, DeleteView):
+class ProductDeleteView(LoginRequiredMixin, GroupRequiredMixin, StaffRequiredMixin, DeleteView):
+    group_required     = ['Administrador']
     model              = Product
     template_name      = 'billing/product_confirm_delete.html'
     success_url        = reverse_lazy('billing:product_list')

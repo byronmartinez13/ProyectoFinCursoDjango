@@ -18,17 +18,22 @@ from django.contrib import admin
 from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
-from security.views import RoleSelectLoginView
+from security.views import RoleSelectLoginView, UsernamePasswordResetView
 
 urlpatterns = [
     path('admin/', admin.site.urls),
     # Se sobreescribe únicamente 'login' (misma URL /accounts/login/) para
     # mostrar la selección de rol por tarjetas antes del formulario real.
-    # El resto de auth (logout, password_change, password_reset...) sigue
-    # viniendo de django.contrib.auth.urls sin cambios.
     path('accounts/login/', RoleSelectLoginView.as_view(), name='login'),
+    # Se sobreescribe 'password_reset' para que la recuperación se haga por
+    # nombre de usuario en vez de por email (ver UsernamePasswordResetForm).
+    # El resto de auth (logout, password_change, password_reset_done,
+    # password_reset_confirm...) sigue viniendo de django.contrib.auth.urls
+    # sin cambios.
+    path('accounts/password_reset/', UsernamePasswordResetView.as_view(), name='password_reset'),
     path('accounts/', include('django.contrib.auth.urls')),
     path('', include('billing.urls')),
     path('purchases/', include('purchasing.urls')),
     path('security/', include('security.urls')),
+    path('tienda/', include('store.urls')),
 ] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

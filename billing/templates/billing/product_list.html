@@ -1,11 +1,14 @@
 {% extends 'billing/base.html' %}
+{% load security_tags %}
 {% block title %}Productos{% endblock %}
 {% block content %}
 
 <div class="d-flex align-items-center justify-content-between mb-4">
   <h2 class="mb-0">Productos</h2>
   <div class="d-flex gap-2">
+    {% if user|has_group:'Administrador' or user|has_group:'Analista de Compras' or not user|has_any_group %}
     <a href="{% url 'billing:product_create' %}" class="btn btn-primary btn-sm">+ Nuevo Producto</a>
+    {% endif %}
     {% include 'billing/_export_buttons.html' %}
   </div>
 </div>
@@ -113,9 +116,13 @@
           data-dm-f7l="Estado"       data-dm-f7v="{{ item.is_active|yesno:'Activo,Inactivo' }}"
           data-dm-f8l="Proveedores"  data-dm-f8v="{% for s in item.suppliers.all %}{{ s.name }}{% if not forloop.last %}, {% endif %}{% empty %}—{% endfor %}" data-dm-f8w="1"
           data-dm-f9l="Descripción"  data-dm-f9v="{{ item.description|default:'—' }}" data-dm-f9w="1"
+          {% if user|has_group:'Administrador' or user|has_group:'Analista de Compras' or not user|has_any_group %}
           data-dm-edit-url="{% url 'billing:product_update' item.pk %}"
+          {% endif %}
         >&#128065; Ver</button>
+        {% if user|has_group:'Administrador' or user|has_group:'Analista de Compras' or not user|has_any_group %}
         <a href="{% url 'billing:product_delete' item.pk %}" class="btn btn-sm btn-danger">Eliminar</a>
+        {% endif %}
       </td>
     </tr>
     {% empty %}

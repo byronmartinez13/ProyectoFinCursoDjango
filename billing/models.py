@@ -1,4 +1,5 @@
 from decimal import Decimal
+from django.conf import settings
 from django.core.validators import MinValueValidator, MaxValueValidator
 from django.db import models
 from shared.validators import validate_cedula_ec
@@ -89,6 +90,10 @@ class Product(models.Model):
 
 class Customer(models.Model):
     """Clientes. OneToOne con CustomerProfile."""
+    user       = models.OneToOneField(
+                     settings.AUTH_USER_MODEL, null=True, blank=True,
+                     on_delete=models.SET_NULL, related_name='customer_account',
+                     verbose_name='Cuenta de usuario')
     dni        = models.CharField(max_length=13, unique=True, verbose_name='DNI/RUC', validators=[validate_cedula_ec])
     first_name = models.CharField(max_length=100)
     last_name  = models.CharField(max_length=100)
@@ -143,6 +148,11 @@ class Invoice(models.Model):
     estado       = models.PositiveSmallIntegerField(
                        choices=ESTADO_CHOICES, default=BORRADOR, verbose_name='Estado')
     is_active    = models.BooleanField(default=True)
+    PAYMENT_CHOICES = [('card', 'Tarjeta'), ('paypal', 'PayPal')]
+    payment_method  = models.CharField(
+                          max_length=10, choices=PAYMENT_CHOICES, null=True, blank=True,
+                          verbose_name='Método de pago')
+    paypal_order_id = models.CharField(max_length=64, null=True, blank=True)
 
     class Meta:
         ordering = ['-invoice_date']
